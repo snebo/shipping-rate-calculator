@@ -73,6 +73,23 @@ The project is structured as a **carrier integration module**:
 
 This separation makes it easy to add new carriers without leaking carrier-specific concerns into the domain layer.
 
+## Approach
+
+The system is built on the Strategy Pattern to ensure it remains "Open-Closed": open for extension (new carriers), closed for modification (core logic).
+
+Carrier Agnosticism: The internal service speaks a unified "Logistics Language." It doesn't care if the underlying provider is UPS or FedEx.
+
+Strategy Pattern: Each carrier implements a RateProvider interface. Adding a new carrier is as simple as creating a new class and registering it in the module.
+
+Anti-Corruption Layer: Dedicated Mappers translate external, often messy carrier payloads into our clean, internal Domain Models.
+
+Resilient Authentication
+The UPS OAuth 2.0 flow is managed transparently:
+
+Proactive Caching: Tokens are stored in-memory to minimize latency.
+
+Reactive Refresh: If a call fails with a 401 Unauthorized, the service automatically clears the cache, fetches a new token, and retries the request once.
+
 ---
 
 ## API
@@ -254,3 +271,27 @@ The recommended pattern is the same:
   - Structured errors
   - Token lifecycle correctness
   - Realistic integration tests
+
+## Post Ideas I though about implementing
+
+To move this from a functional MVP to a production-grade service, the following would be implemented:
+
+1. Enhanced Reliability
+   Circuit Breakers: Implement opossum to "trip" and stop calling a carrier if their API is consistently failing, protecting our system resources.
+
+Distributed Caching: Move OAuth tokens to Redis to support horizontal scaling across multiple server instances.
+
+2. Advanced Testing
+   Contract Testing: Use tools like Pact to ensure our mocked UPS responses stay in sync with their actual API updates.
+
+Live Sandbox Suite: Create a separate CI pipeline to run "smoke tests" against real UPS/FedEx sandbox environments using encrypted secrets.
+
+3. Better Observability
+   OpenTelemetry: Add tracing to measure exactly how much latency is caused by our mapping logic vs. the upstream carrier response.
+
+Structured Logging: Mask PII (addresses/names) while capturing full request/response payloads for faster debugging.
+
+4. Feature Expansion
+   Multi-Carrier Shopping: A "Broker" service to call all registered carriers in parallel and return the cheapest/fastest quote.
+
+Address Validation: A pre-rating step to ensure addresses are "carrier-clean" before hitting the rating API.
