@@ -165,7 +165,6 @@ export class UpsRatingClient implements RateProvider {
   }
 
   private ensureUpsRatingPayload(data: unknown): UpsRatingResponsePayload {
-    // Covers malformed JSON that Axios returns as a string
     if (!data || typeof data !== 'object') {
       throw new CarrierError(
         'CARRIER_BAD_RESPONSE',
@@ -175,8 +174,7 @@ export class UpsRatingClient implements RateProvider {
       );
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-    const rr = (data as any).RateResponse;
+    const rr = (data as Record<string, unknown>).RateResponse;
     if (!rr || typeof rr !== 'object') {
       throw new CarrierError(
         'CARRIER_BAD_RESPONSE',
@@ -186,11 +184,15 @@ export class UpsRatingClient implements RateProvider {
       );
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    if (!Array.isArray(rr.RatedShipment)) {
+    const shipment = (rr as Record<string, unknown>).RatedShipment;
+    const isValidShipment =
+      Array.isArray(shipment) ||
+      (typeof shipment === 'object' && shipment !== null);
+
+    if (!isValidShipment) {
       throw new CarrierError(
         'CARRIER_BAD_RESPONSE',
-        'UPS rating returned unexpected payload shape (RatedShipment not an array)',
+        'UPS rating returned unexpected payload shape (missing RatedShipment)',
         502,
         { carrier: 'ups', raw: data },
       );

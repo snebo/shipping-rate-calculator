@@ -6,7 +6,6 @@ const UPS_DIM_UNIT = 'CM';
 const UPS_WEIGHT_UNIT = 'KGS';
 
 function serviceNameFromCode(code: string): string {
-  // minimal example; expand as needed
   switch (code) {
     case '03':
       return 'UPS Ground';
@@ -14,6 +13,14 @@ function serviceNameFromCode(code: string): string {
       return 'UPS 2nd Day Air';
     case '01':
       return 'UPS Next Day Air';
+    case '14':
+      return 'UPS Next Day Air Early';
+    case '13':
+      return 'UPS Next Day Air Saver';
+    case '59':
+      return 'UPS 2nd Day Air A.M.';
+    case '12':
+      return 'UPS 3 Day Select';
     default:
       return `UPS Service ${code}`;
   }
@@ -24,6 +31,11 @@ export function buildUpsRatingPayload(
 ): UpsRatingRequestPayload {
   return {
     RateRequest: {
+      Request: {
+        TransactionReference: {
+          CustomerContext: 'RateRequest',
+        },
+      },
       Shipment: {
         Shipper: {
           Address: {
@@ -37,12 +49,22 @@ export function buildUpsRatingPayload(
             CountryCode: domain.destination.countryCode,
           },
         },
+        // ShipFrom is required when different from Shipper
+        ShipFrom: {
+          Address: {
+            PostalCode: domain.origin.postalCode,
+            CountryCode: domain.origin.countryCode,
+          },
+        },
         Package: domain.parcels.map((p) => ({
+          PackagingType: {
+            Code: '02',
+          },
           Dimensions: {
             UnitOfMeasurement: { Code: UPS_DIM_UNIT },
-            Length: String(p.dimensions.lengthCm),
-            Width: String(p.dimensions.widthCm),
-            Height: String(p.dimensions.heightCm),
+            Length: String(Math.ceil(p.dimensions.lengthCm)),
+            Width: String(Math.ceil(p.dimensions.widthCm)),
+            Height: String(Math.ceil(p.dimensions.heightCm)),
           },
           PackageWeight: {
             UnitOfMeasurement: { Code: UPS_WEIGHT_UNIT },
@@ -55,13 +77,14 @@ export function buildUpsRatingPayload(
 }
 
 export function normalizeUpsRates(resp: UpsRatingResponsePayload): RateQuote[] {
-  const rated = resp?.RateResponse?.RatedShipment;
-  if (!Array.isArray(rated)) return [];
+  const raw = resp?.RateResponse?.RatedShipment;
+  if (!raw) return [];
+  const rated = Array.isArray(raw) ? raw : [raw];
 
   return rated.map((s) => ({
-    carrier: 'ups',
+    carrier: 'ups' as const,
     serviceCode: s.Service.Code,
-    serviceName: s.Service.Description ?? serviceNameFromCode(s.Service.Code),
+    serviceName: s.Service.Description || serviceNameFromCode(s.Service.Code),
     totalCharge: {
       currency: s.TotalCharges.CurrencyCode,
       amount: s.TotalCharges.MonetaryValue,
