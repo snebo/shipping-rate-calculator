@@ -1,98 +1,256 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Shipping Carrier Integration Service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A NestJS module that wraps carrier APIs behind a clean, strongly-typed domain interface.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+This repository currently implements **UPS Rate Shopping** (rating) and is designed to be **extensible** for:
 
-## Description
+- Additional carriers (FedEx, USPS, DHL, etc.)
+- Additional operations (labels, purchases, tracking, address validation, etc.)
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+> This project does **not** require working UPS keys or live carrier calls to run tests.  
+> All external calls are mocked in integration tests.
 
-## Project setup
+---
 
-```bash
-$ npm install
+## What it does
+
+### Rate Shopping
+
+- **Endpoint:** `POST /ups/ups_rates`
+- **Accepts:** origin, destination, parcels (dimensions + weight), optional service filters
+- **Returns:** normalized rate quotes in internal format
+
+### UPS OAuth 2.0 client credentials
+
+- Token acquisition via UPS OAuth endpoint
+- Token caching (reuse while valid)
+- Transparent token refresh on expiry
+- 401 retry flow (refresh and retry once)
+
+### Strong typing
+
+- Domain request/response models
+- Typed carrier client and mapper layers
+
+### Structured, meaningful errors
+
+Every error returned to the caller is normalized into a consistent structure:
+
+- carrier identification (e.g. `ups`)
+- upstream status codes (when present)
+- machine-readable error codes
+- appropriate HTTP status mapping (e.g. 502/504)
+
+### Integration tests (E2E)
+
+Tests validate:
+
+- request payloads built correctly from domain models
+- UPS responses parsed + normalized correctly
+- token lifecycle works (acquire, reuse, refresh)
+- upstream failures produce expected structured errors:
+  - 4xx
+  - 5xx
+  - malformed JSON
+  - timeouts
+
+---
+
+## Architecture
+
+The project is structured as a **carrier integration module**:
+
+- **Domain models** (carrier-agnostic)
+  - `RateRequest`, `RateQuote`, etc.
+- **Carrier clients** (carrier-specific adapters)
+  - `UpsRatingClient` implements `RateProvider`
+  - `UpsAuthService` manages OAuth tokens (cache + refresh)
+- **Mappers**
+  - Build carrier payloads from domain types
+  - Normalize carrier responses into internal types
+- **Errors**
+  - Shared structured error types & mapping logic
+
+This separation makes it easy to add new carriers without leaking carrier-specific concerns into the domain layer.
+
+---
+
+## API
+
+### `POST /ups/ups_rates`
+
+#### Request body (example)
+
+```json
+{
+  "origin": {
+    "address1": "1 Main",
+    "city": "Atlanta",
+    "postalCode": "30301",
+    "countryCode": "US"
+  },
+  "destination": {
+    "address1": "2 Main",
+    "city": "NYC",
+    "postalCode": "10001",
+    "countryCode": "US"
+  },
+  "parcels": [
+    {
+      "dimensions": { "lengthCm": 10, "widthCm": 20, "heightCm": 30 },
+      "weight": { "weightKg": 2 }
+    }
+  ]
+}
 ```
 
-## Compile and run the project
+#### Successful response (normalized)
 
-```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+```json
+{
+  "quotes": [
+    {
+      "carrier": "ups",
+      "serviceCode": "03",
+      "serviceName": "UPS Ground",
+      "totalCharge": { "currency": "USD", "amount": "12.34" },
+      "estimatedDeliveryDate": "2026-02-15"
+    }
+  ]
+}
 ```
 
-## Run tests
+#### Error response (structured)
 
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+```json
+{
+  "error": {
+    "code": "CARRIER_UPSTREAM_4XX",
+    "details": {
+      "carrier": "ups",
+      "upstreamStatus": 400
+    }
+  }
+}
 ```
 
-## Deployment
+Common error codes include:
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+- `CARRIER_UPSTREAM_4XX`
+- `CARRIER_UPSTREAM_5XX`
+- `CARRIER_RATE_TIMEOUT`
+- `CARRIER_BAD_RESPONSE`
+- `CARRIER_RATE_FAILED`
+- `CARRIER_UNEXPECTED`
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+---
+
+## Local setup
+
+### Requirements
+
+- Node.js (LTS recommended)
+- npm
+
+### Install
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm install
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### Environment variables
 
-## Resources
+Copy the example file:
 
-Check out a few resources that may come in handy when working with NestJS:
+```bash
+cp .env.example .env
+```
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+> Values do not need to be real for tests; external calls are mocked.
 
-## Support
+---
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+## Running tests
 
-## Stay in touch
+### Unit tests
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```bash
+npm test
+```
 
-## License
+### E2E / integration tests
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+```bash
+npm run test:e2e
+```
+
+E2E tests mock all UPS HTTP interactions (OAuth + rating) and validate behavior end-to-end.
+
+---
+
+## Extending the module
+
+### Adding another carrier (example approach)
+
+1. Implement the `RateProvider` interface for the new carrier:
+
+```ts
+@Injectable()
+export class FedexRatingClient implements RateProvider {
+  carrier = 'fedex' as const;
+
+  async getRates(request: RateRequest): Promise<RateQuote[]> {
+    // 1) build FedEx payload from RateRequest
+    // 2) call FedEx API
+    // 3) normalize to RateQuote[]
+    return [];
+  }
+}
+```
+
+2. Add it to your carrier module providers:
+
+- register the provider
+- register it in a resolver/factory (so controllers can route to it)
+
+3. Add a controller route such as:
+
+- `POST /fedex/rates`
+
+4. Add E2E tests that mirror UPS tests:
+
+- payload creation
+- normalization
+- auth lifecycle (if applicable)
+- 4xx/5xx/malformed/timeout error mappings
+
+---
+
+## Future operations
+
+This module is intentionally designed to expand beyond rating:
+
+- **Label creation / purchase**
+- **Tracking**
+- **Address validation**
+- **Pickup scheduling**
+- **Returns**
+
+The recommended pattern is the same:
+
+- define domain interfaces + types
+- implement per-carrier adapters
+- normalize responses into internal types
+- write E2E tests with mocked upstream calls
+
+---
+
+## Notes
+
+- External networking is disabled in tests (only localhost allowed)
+- Carrier calls are mocked using HTTP interceptors
+- The service focuses on correctness, reliability, and clarity:
+  - Strong typing
+  - Structured errors
+  - Token lifecycle correctness
+  - Realistic integration tests
