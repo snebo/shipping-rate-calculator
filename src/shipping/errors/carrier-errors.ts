@@ -26,3 +26,16 @@ export class CarrierError extends Error {
     super(message);
   }
 }
+
+export interface AxiosLikeError {
+  code?: string;
+  message?: string;
+  response?: {
+    status?: number;
+    data?: unknown;
+  };
+}
+
+export function isAxiosLikeError(err: unknown): err is AxiosLikeError {
+  return typeof err === 'object' && err !== null;
+}
