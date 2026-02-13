@@ -14,6 +14,7 @@ export interface CarrierErrorDetails {
   upstreamMessage?: string;
   requestId?: string;
   raw?: unknown;
+  _debug?: unknown;
 }
 
 export class CarrierError extends Error {
@@ -39,3 +40,9 @@ export interface AxiosLikeError {
 export function isAxiosLikeError(err: unknown): err is AxiosLikeError {
   return typeof err === 'object' && err !== null;
 }
+
+export const TIMEOUT_CODES = new Set([
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'ERR_CANCELED',
+]);

@@ -10,7 +10,7 @@ import { RateRequestDto } from '../dto/rate-request.dto';
 import { CarrierExceptionFilter } from '../errors/carrier-exception.filter';
 import { RateRequest } from '../domain/rate-request';
 
-@Controller('ups-rates')
+@Controller('ups')
 @UseFilters(new CarrierExceptionFilter())
 export class UpsRatesController {
   constructor(private readonly registry: CarrierRegistry) {}

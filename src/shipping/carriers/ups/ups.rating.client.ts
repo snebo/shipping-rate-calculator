@@ -6,6 +6,7 @@ import {
   AxiosLikeError,
   CarrierError,
   isAxiosLikeError,
+  TIMEOUT_CODES,
 } from '../../errors/carrier-errors';
 import { RateProvider } from '../carrier.types';
 import { RateRequest } from '../../domain/rate-request';
@@ -30,25 +31,38 @@ export class UpsRatingClient implements RateProvider {
     const payload = buildUpsRatingPayload(request);
 
     const token = await this.auth.getAccessToken();
+
     try {
       const resp = await firstValueFrom(
         this.http.post<UpsRatingResponsePayload>(ratingUrl, payload, {
           timeout: timeoutMs,
           headers: { Authorization: `Bearer ${token}` },
-        }),
+          responseType: 'json',
+          transitional: {
+            forcedJSONParsing: true,
+            silentJSONParsing: false,
+          },
+        } as any),
       );
 
-      if (!resp?.data) {
+      const payloadData = this.ensureUpsRatingPayload(resp?.data);
+
+      try {
+        return normalizeUpsRates(payloadData);
+      } catch {
+        // If mapper blows up due to unexpected inner fields, treat as bad upstream response
         throw new CarrierError(
           'CARRIER_BAD_RESPONSE',
-          'UPS rating returned empty response',
+          'UPS rating returned malformed shipment entries',
           502,
-          { carrier: 'ups' },
+          { carrier: 'ups', raw: resp?.data },
         );
       }
-
-      return normalizeUpsRates(resp.data);
     } catch (err: unknown) {
+      if (err instanceof CarrierError) {
+        throw err;
+      }
+
       if (!isAxiosLikeError(err)) {
         throw new CarrierError(
           'CARRIER_UNEXPECTED',
@@ -78,10 +92,31 @@ export class UpsRatingClient implements RateProvider {
         this.http.post<UpsRatingResponsePayload>(ratingUrl, payload, {
           timeout: timeoutMs,
           headers: { Authorization: `Bearer ${token}` },
-        }),
+          responseType: 'json',
+          transitional: {
+            forcedJSONParsing: true,
+            silentJSONParsing: false,
+          },
+        } as any),
       );
-      return normalizeUpsRates(resp.data);
+
+      const payloadData = this.ensureUpsRatingPayload(resp?.data);
+
+      try {
+        return normalizeUpsRates(payloadData);
+      } catch {
+        throw new CarrierError(
+          'CARRIER_BAD_RESPONSE',
+          'UPS rating returned malformed shipment entries',
+          502,
+          { carrier: 'ups', raw: resp?.data },
+        );
+      }
     } catch (err: unknown) {
+      if (err instanceof CarrierError) {
+        throw err;
+      }
+
       throw this.mapUpsRatingError(
         isAxiosLikeError(err) ? err : { message: 'Unknown UPS retry error' },
       );
@@ -89,7 +124,7 @@ export class UpsRatingClient implements RateProvider {
   }
 
   private mapUpsRatingError(err: AxiosLikeError): CarrierError {
-    if (err.code === 'ECONNABORTED') {
+    if (err.code !== undefined && TIMEOUT_CODES.has(err.code)) {
       return new CarrierError(
         'CARRIER_RATE_TIMEOUT',
         'UPS rating request timed out',
@@ -127,5 +162,40 @@ export class UpsRatingClient implements RateProvider {
       502,
       { carrier: 'ups', raw: data ?? rawMessage },
     );
+  }
+
+  private ensureUpsRatingPayload(data: unknown): UpsRatingResponsePayload {
+    // Covers malformed JSON that Axios returns as a string
+    if (!data || typeof data !== 'object') {
+      throw new CarrierError(
+        'CARRIER_BAD_RESPONSE',
+        'UPS rating returned non-JSON / malformed JSON',
+        502,
+        { carrier: 'ups', raw: data },
+      );
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+    const rr = (data as any).RateResponse;
+    if (!rr || typeof rr !== 'object') {
+      throw new CarrierError(
+        'CARRIER_BAD_RESPONSE',
+        'UPS rating returned unexpected payload shape (missing RateResponse)',
+        502,
+        { carrier: 'ups', raw: data },
+      );
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    if (!Array.isArray(rr.RatedShipment)) {
+      throw new CarrierError(
+        'CARRIER_BAD_RESPONSE',
+        'UPS rating returned unexpected payload shape (RatedShipment not an array)',
+        502,
+        { carrier: 'ups', raw: data },
+      );
+    }
+
+    return data as UpsRatingResponsePayload;
   }
 }
